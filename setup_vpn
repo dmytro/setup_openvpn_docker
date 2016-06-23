@@ -2,7 +2,6 @@
 
 set -e
 
-
 OVPN_DATA="openvpn-certificates" # Name of the data container
 OVPN_SERVER="openvpn-server"     # Name of the server container
 
@@ -23,44 +22,45 @@ client_configuration () {
 }
 
 data_container_exists () {
-  [[ ! -z $(docker ps -a --filter "name=${OVPN_DATA}" --format '{{.ID}}') ]]
+  docker ps -a --filter "name=${OVPN_DATA}" | grep -q ${OVPN_DATA}
 }
 
 data_container () {
+  docker rm -f ${OVPN_DATA} || true
   docker run --name $OVPN_DATA -v /etc/openvpn busybox
 }
 
 server_configuration () {
   docker run \
          --volumes-from $OVPN_DATA \
+         --rm kylemanna/openvpn \
+         ovpn_genconfig -u udp://${VPN_SERVER}:1194
+
+  docker run \
+         -e DEBUG=1 \
+         --volumes-from $OVPN_DATA \
          --rm -it kylemanna/openvpn \
          ovpn_initpki
 
-  docker run \
-         --volumes-from $OVPN_DATA \
-         --rm kylemanna/openvpn \
-         ovpn_genconfig -u udp://${VPN_SERVER}:1194
 }
 
 setup () {
-  if data_container_exists; then
-    echo "This wil overwrite existing server configuration."
-    echo "You will also need to re-create all client configs."
-    read -p "Continue? (y/N):" ANS
-    if [[ ${ANS} =~ ^y ]]; then
-      server_configuration
-    else
-      exit
-    fi
-  else
+  echo
+  echo "This wil overwrite existing server configuration."
+  echo "You will also need to re-create all client configs."
+  echo
+  read -p "Continue? (y/N):" ANS
+  if [[ ${ANS} =~ ^y ]]; then
     data_container
     server_configuration
+  else
+    exit
   fi
 
 }
 
 server_is_running () {
-  [[ ! -z $(docker ps --filter "name=${OVPN_SERVER}" --format '{{.ID}}') ]]
+  docker ps --filter "name=${OVPN_SERVER}" | grep -q ${OVPN_SERVER} > /dev/null 2>&1
 }
 
 start_server () {
