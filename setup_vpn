@@ -1,0 +1,115 @@
+#!/bin/bash
+
+set -e
+
+
+OVPN_DATA="openvpn-certificates" # Name of the data container
+OVPN_SERVER="openvpn-server"     # Name of the server container
+
+
+client_configuration () {
+  local CLIENTNAME=$1
+
+  docker run \
+         --volumes-from $OVPN_DATA \
+         --rm -it kylemanna/openvpn \
+         easyrsa build-client-full ${CLIENTNAME} nopass
+
+  docker run \
+         --volumes-from $OVPN_DATA \
+         --rm kylemanna/openvpn \
+         ovpn_getclient ${CLIENTNAME} > ${CLIENTNAME}.ovpn
+
+}
+
+data_container_exists () {
+  [[ ! -z $(docker ps -a --filter "name=${OVPN_DATA}" --format '{{.ID}}') ]]
+}
+
+data_container () {
+  docker run --name $OVPN_DATA -v /etc/openvpn busybox
+}
+
+server_configuration () {
+  docker run \
+         --volumes-from $OVPN_DATA \
+         --rm -it kylemanna/openvpn \
+         ovpn_initpki
+
+  docker run \
+         --volumes-from $OVPN_DATA \
+         --rm kylemanna/openvpn \
+         ovpn_genconfig -u udp://${VPN_SERVER}:1194
+}
+
+setup () {
+  if data_container_exists; then
+    echo "This wil overwrite existing server configuration."
+    echo "You will also need to re-create all client configs."
+    read -p "Continue? (y/N):" ANS
+    if [[ ${ANS} =~ ^y ]]; then
+      server_configuration
+    else
+      exit
+    fi
+  else
+    data_container
+    server_configuration
+  fi
+
+}
+
+server_is_running () {
+  [[ ! -z $(docker ps --filter "name=${OVPN_SERVER}" --format '{{.ID}}') ]]
+}
+
+start_server () {
+  if server_is_running; then
+    echo Please stop VPN server first
+    exit 1
+  else
+    if data_container_exists; then
+      docker rm ${OVPN_SERVER} || true
+      docker run \
+             --name openvpn-server \
+             --volumes-from $OVPN_DATA \
+             --restart always \
+             -d -p 1194:1194/udp  --privileged \
+             kylemanna/openvpn
+    else
+      echo Please create configuration
+      exit
+    fi
+  fi
+}
+
+usage () {
+  cat <<EOF
+
+  --server FQHN -- create server configuration. Provide either resolvable
+                   DNS name or IP address of the server to be.
+  --client NAME -- create client configuration and save to local file
+  --start       -- start OpenVPN server
+EOF
+}
+
+main () {
+  case $1 in
+    --server)
+      shift
+      VPN_SERVER=$1
+      setup
+      ;;
+
+    --client)
+      CLIENTNAME=$2
+      client_configuration ${CLIENTNAME}
+      ;;
+    --start) start_server ;;
+    *)
+      usage
+      exit 1
+  esac
+}
+
+main $@
